@@ -2,8 +2,6 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import feedparser
-import json
-import os
 import asyncio
 import aiohttp
 
@@ -11,72 +9,66 @@ import aiohttp
 class TwitterTracker(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config_file = 'config.json'
         # Bắt đầu vòng lặp quét bài
         self.check_twitter.start()
 
-    def get_data(self):
-        """Đọc dữ liệu từ file config.json"""
-        if not os.path.exists(self.config_file):
-            return {"twitter": {"channel_id": None, "accounts": {}}}
-        with open(self.config_file, 'r', encoding='utf-8') as f:
-            return json.load(f)
-
-    def save_data(self, data):
-        """Lưu dữ liệu vào file config.json"""
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=4)
+    def cog_unload(self):
+        self.check_twitter.cancel()
 
     # --- CÁC LỆNH SLASH COMMAND ---
 
-    @app_commands.command(name="twitter_setup", description="Đặt kênh nhận thông báo Twitter")
-    @app_commands.describe(channel="Kênh văn bản muốn bot gửi bài đăng vào")
+    @app_commands.command(name="twitter_setup", description="[Admin] Đặt kênh nhận thông báo Twitter")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def twitter_setup(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        data = self.get_data()
-        if "twitter" not in data:
-            data["twitter"] = {"channel_id": None, "accounts": {}}
+        guild_id = str(interaction.guild.id)
 
-        data["twitter"]["channel_id"] = channel.id
-        self.save_data(data)
-        await interaction.response.send_message(f"✅ Đã đặt kênh thông báo Twitter là {channel.mention}")
+        if guild_id not in self.bot.server_configs["guilds"]:
+            self.bot.server_configs["guilds"][guild_id] = {}
 
-    @app_commands.command(name="twitter_add", description="Thêm tài khoản Twitter vào danh sách theo dõi")
-    @app_commands.describe(username="Tên người dùng (VD: elonmusk)")
+        self.bot.server_configs["guilds"][guild_id]["twitter_channel"] = channel.id
+        self.bot.save_configs()
+        await interaction.response.send_message(f"✅ Đã đặt kênh thông báo Twitter là {channel.mention}", ephemeral=True)
+
+    @app_commands.command(name="twitter_add", description="[Admin] Thêm tài khoản Twitter vào danh sách theo dõi")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def twitter_add(self, interaction: discord.Interaction, username: str):
         username = username.replace("@", "").lower()
-        data = self.get_data()
+        guild_id = str(interaction.guild.id)
 
-        if "twitter" not in data:
-            data["twitter"] = {"channel_id": None, "accounts": {}}
-        if "accounts" not in data["twitter"]:
-            data["twitter"]["accounts"] = {}
+        if guild_id not in self.bot.server_configs["guilds"]:
+            self.bot.server_configs["guilds"][guild_id] = {}
 
-        if username in data["twitter"]["accounts"]:
+        if "twitter_accounts" not in self.bot.server_configs["guilds"][guild_id]:
+            self.bot.server_configs["guilds"][guild_id]["twitter_accounts"] = {}
+
+        accounts = self.bot.server_configs["guilds"][guild_id]["twitter_accounts"]
+
+        if username in accounts:
             await interaction.response.send_message(f"❌ `@{username}` đã có trong danh sách.", ephemeral=True)
         else:
-            data["twitter"]["accounts"][username] = "0"
-            self.save_data(data)
+            accounts[username] = "0"
+            self.bot.save_configs()
             await interaction.response.send_message(f"✅ Đã thêm `@{username}` vào danh sách theo dõi.")
 
-    @app_commands.command(name="twitter_remove", description="Xóa tài khoản khỏi danh sách theo dõi")
+    @app_commands.command(name="twitter_remove", description="[Admin] Xóa tài khoản khỏi danh sách theo dõi")
     @app_commands.checks.has_permissions(manage_guild=True)
     async def twitter_remove(self, interaction: discord.Interaction, username: str):
         username = username.replace("@", "").lower()
-        data = self.get_data()
+        guild_id = str(interaction.guild.id)
 
-        if "twitter" in data and username in data["twitter"].get("accounts", {}):
-            del data["twitter"]["accounts"][username]
-            self.save_data(data)
+        accounts = self.bot.server_configs["guilds"].get(guild_id, {}).get("twitter_accounts", {})
+
+        if username in accounts:
+            del accounts[username]
+            self.bot.save_configs()
             await interaction.response.send_message(f"🗑️ Đã ngừng theo dõi `@{username}`.")
         else:
             await interaction.response.send_message(f"❌ Không tìm thấy `@{username}`.", ephemeral=True)
 
     @app_commands.command(name="twitter_list", description="Xem danh sách tài khoản Twitter đang theo dõi")
     async def twitter_list(self, interaction: discord.Interaction):
-        data = self.get_data()
-        accounts = data.get("twitter", {}).get("accounts", {})
+        guild_id = str(interaction.guild.id)
+        accounts = self.bot.server_configs["guilds"].get(guild_id, {}).get("twitter_accounts", {})
 
         if not accounts:
             return await interaction.response.send_message("Danh sách đang trống.")
@@ -87,62 +79,49 @@ class TwitterTracker(commands.Cog):
 
     # --- HỆ THỐNG QUÉT TỰ ĐỘNG ---
 
-    @tasks.loop(minutes=2.0)
+    @tasks.loop(minutes=5.0)  # Tăng lên 5 phút để tránh bị Nitter chặn IP (Rate Limit)
     async def check_twitter(self):
-        data = self.get_data()
-        twitter_config = data.get("twitter", {})
-        channel_id = twitter_config.get("channel_id")
-        accounts = twitter_config.get("accounts", {})
-
-        if not channel_id or not accounts:
-            return
-
-        channel = self.bot.get_channel(channel_id)
-        if not channel:
-            return
-
         async with aiohttp.ClientSession() as session:
-            for username, last_id in accounts.items():
-                try:
-                    # Sử dụng instance Nitter (Có thể thay nitter.net bằng nitter.cz hoặc nitter.it)
-                    rss_url = f"https://nitter.net/{username}/rss"
+            # Duyệt qua từng server trong cấu hình
+            for guild_id, config in self.bot.server_configs["guilds"].items():
+                channel_id = config.get("twitter_channel")
+                accounts = config.get("twitter_accounts", {})
 
-                    async with session.get(rss_url, timeout=15) as response:
-                        if response.status == 200:
-                            xml_data = await response.text()
-                            feed = feedparser.parse(xml_data)
+                if not channel_id or not accounts:
+                    continue
 
-                            if not feed.entries:
-                                # Console log để bạn biết instance đang bị "Empty Feed"
-                                print(f"⚠️ @{username}: Kết nối OK nhưng Nitter trả về danh sách trống.")
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    continue
+
+                for username, last_id in accounts.items():
+                    try:
+                        # Thử các instance Nitter khác nhau nếu nitter.net bị lỗi
+                        rss_url = f"https://nitter.privacydev.net/{username}/rss"
+
+                        async with session.get(rss_url, timeout=15) as response:
+                            if response.status == 200:
+                                xml_data = await response.text()
+                                feed = feedparser.parse(xml_data)
+                                if not feed.entries: continue
+                            else:
                                 continue
-                        else:
-                            print(f"❌ @{username}: Lỗi kết nối Nitter (Status: {response.status})")
-                            continue
 
-                    # Lấy bài đăng mới nhất
-                    latest_tweet = feed.entries[0]
-                    # Tách ID từ link: https://nitter.net/user/status/123#m -> 123
-                    tweet_id = str(latest_tweet.link.split('/')[-1].split('#')[0])
+                        latest_tweet = feed.entries[0]
+                        tweet_id = str(latest_tweet.link.split('/')[-1].split('#')[0])
 
-                    # In DEBUG ra console để soi lỗi nếu cần
-                    # print(f"🔍 DEBUG @{username} | Web: {tweet_id} | Saved: {last_id}")
+                        if tweet_id != str(last_id):
+                            fxtwitter_url = f"https://fxtwitter.com/{username}/status/{tweet_id}"
+                            await channel.send(fxtwitter_url)
 
-                    if tweet_id != str(last_id):
-                        # Gửi link fxtwitter để tự hiện Embed đẹp
-                        fxtwitter_url = f"https://fxtwitter.com/{username}/status/{tweet_id}"
-                        await channel.send(fxtwitter_url)
+                            # Cập nhật ID mới trực tiếp vào cache RAM của bot
+                            self.bot.server_configs["guilds"][guild_id]["twitter_accounts"][username] = tweet_id
+                            self.bot.save_configs()
 
-                        # Cập nhật ID mới vào dữ liệu và lưu file
-                        data["twitter"]["accounts"][username] = tweet_id
-                        self.save_data(data)
-                        print(f"🔔 Đã gửi bài mới của @{username}!")
+                        await asyncio.sleep(1)  # Nghỉ ngắn giữa các tài khoản
 
-                    # Nghỉ 2 giây để tránh bị Rate Limit
-                    await asyncio.sleep(2)
-
-                except Exception as e:
-                    print(f"❗ Lỗi khi quét @{username}: {e}")
+                    except Exception as e:
+                        print(f"❗ Lỗi quét @{username} tại Guild {guild_id}: {e}")
 
     @check_twitter.before_loop
     async def before_check_twitter(self):

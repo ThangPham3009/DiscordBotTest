@@ -1,0 +1,23 @@
+{
+    "guilds": {
+        "ID_SERVER_1": {
+            "confession_channel": 0,
+            "last_confession_id": 0,
+            "welcome_channel": 0,
+            "twitter_channel": 0,
+            "twitter_accounts": [],
+            "admin_role_id": 0
+        },
+        "1502283307214180462": {
+            "confession_channel": 1502283309680558111,
+            "reaction_roles": {
+                "1504084493705936966": {
+                    "😭": 1503366282848764009
+                },
+                "1504088317778595981": {
+                    "😭": 1502294606866546870
+                }
+            }
+        }
+    }
+}

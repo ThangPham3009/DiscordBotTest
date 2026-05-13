@@ -1,23 +1,40 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
-import json
 
 
 class Welcome(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config_file = 'config.json'
+
+    @app_commands.command(name="set_welcome", description="[Admin] Thiết lập kênh chào mừng/tạm biệt cho server")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_welcome(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        guild_id = str(interaction.guild.id)
+
+        # Khởi tạo vùng nhớ cho server nếu chưa có
+        if guild_id not in self.bot.server_configs["guilds"]:
+            self.bot.server_configs["guilds"][guild_id] = {}
+
+        # Lưu ID kênh vào cache trên RAM
+        self.bot.server_configs["guilds"][guild_id]["welcome_channel"] = channel.id
+
+        # Ghi xuống file JSON thông qua hàm ở main.py
+        self.bot.save_configs()
+
+        await interaction.response.send_message(f"✅ Đã thiết lập {channel.mention} làm kênh chào mừng và tạm biệt!",
+                                                ephemeral=True)
 
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        with open(self.config_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        guild_id = str(member.guild.id)
+        # Truy xuất kênh từ cache RAM
+        configs = self.bot.server_configs["guilds"].get(guild_id, {})
+        channel_id = configs.get("welcome_channel")
 
-        channel_id = data['welcome_channels'].get(str(member.guild.id))
         if channel_id:
             channel = member.guild.get_channel(channel_id)
             if channel:
-                # Embed tối giản không ảnh banner
                 embed = discord.Embed(
                     title=f"✨ Chào mừng {member.name} đã đến với Yuri Garden. ✨",
                     description=(
@@ -28,15 +45,15 @@ class Welcome(commands.Cog):
                     color=0xffc0cb
                 )
                 embed.set_footer(text="Yuri Garden | #YG")
-
                 await channel.send(f"Chào mừng {member.mention}!", embed=embed)
 
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-        with open(self.config_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        guild_id = str(member.guild.id)
+        # Truy xuất kênh từ cache RAM
+        configs = self.bot.server_configs["guilds"].get(guild_id, {})
+        channel_id = configs.get("welcome_channel")
 
-        channel_id = data['welcome_channels'].get(str(member.guild.id))
         if channel_id:
             channel = member.guild.get_channel(channel_id)
             if channel:

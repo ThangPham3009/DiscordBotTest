@@ -1,27 +1,48 @@
 import discord
 from discord.ext import commands
 import os
+import json
 from dotenv import load_dotenv
 
 # Load dữ liệu từ file .env
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+CONFIG_FILE = 'server_config.json'
+
 
 class MyBot(commands.Bot):
     def __init__(self):
-        # Thiết lập quyền hạn (Intents)
+        # 1. Thiết lập quyền hạn (Intents)
         intents = discord.Intents.default()
-        intents.members = True  # Quyền quản lý thành viên (Welcome/Boost)
-        intents.message_content = True  # Quyền đọc nội dung tin nhắn
+        intents.members = True
+        intents.message_content = True
 
         super().__init__(command_prefix='!', intents=intents)
 
-    async def setup_hook(self):
-        """Hàm chạy một lần khi bot khởi động để cài đặt các thành phần"""
+        # 2. Kho lưu trữ cấu hình trên RAM (Cache)
+        self.server_configs = {}
+        self.load_all_configs()
 
-        # 1. Tự động load tất cả file trong thư mục cogs
-        print("--- Đang nạp các Cogs ---")
+    def load_all_configs(self):
+        """Đọc file JSON vào RAM khi khởi động"""
+        if not os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump({"guilds": {}}, f)
+
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            self.server_configs = json.load(f)
+        print("📂 Đã nạp cấu hình các server vào RAM.")
+
+    def save_configs(self):
+        """Ghi dữ liệu từ RAM xuống file JSON (gọi khi có thay đổi)"""
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.server_configs, f, ensure_ascii=False, indent=4)
+
+    async def setup_hook(self):
+        """Hàm chạy một lần khi bot khởi động"""
+
+        print("--- 🛠️ Đang nạp các Cogs ---")
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py'):
                 try:
@@ -30,11 +51,8 @@ class MyBot(commands.Bot):
                 except Exception as e:
                     print(f"❌ Lỗi nạp {filename}: {e}")
 
-        # 2. Đồng bộ lệnh Slash (Slash Commands)
-        # Thay đổi ID này thành ID server test của bạn để lệnh hiện ngay lập tức
+        # Đồng bộ lệnh Slash
         MY_GUILD = discord.Object(id=1502283307214180462)
-
-        # Chép lệnh từ global vào riêng server này để tránh chờ 1 tiếng
         self.tree.copy_global_to(guild=MY_GUILD)
         await self.tree.sync(guild=MY_GUILD)
 
