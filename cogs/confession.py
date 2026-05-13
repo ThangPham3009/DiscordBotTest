@@ -50,7 +50,7 @@ class ConfessModal(discord.ui.Modal, title='Gửi Lời Thổ Lộ Ẩn Danh'):
             "content": self.content.value
         })
 
-        # 3. Ghi dữ liệu xuống file (Thông qua hàm ở main.py)
+        # 3. Ghi dữ liệu xuống file (Thông qua hàm ở app.py)
         self.bot.save_configs()
 
         # 4. Gửi Embed vào kênh

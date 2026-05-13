@@ -19,7 +19,7 @@ class Welcome(commands.Cog):
         # Lưu ID kênh vào cache trên RAM
         self.bot.server_configs["guilds"][guild_id]["welcome_channel"] = channel.id
 
-        # Ghi xuống file JSON thông qua hàm ở main.py
+        # Ghi xuống file JSON thông qua hàm ở app.py
         self.bot.save_configs()
 
         await interaction.response.send_message(f"✅ Đã thiết lập {channel.mention} làm kênh chào mừng và tạm biệt!",
