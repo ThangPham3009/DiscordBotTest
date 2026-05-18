@@ -1,68 +1,58 @@
 import discord
 from discord.ext import commands
+import aiosqlite
 import os
-import json
 from dotenv import load_dotenv
 
-# Load dữ liệu từ file .env
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-CONFIG_FILE = 'server_config.json'
-
-
-class MyBot(commands.Bot):
+class YuriBot(commands.Bot):
     def __init__(self):
-        # 1. Thiết lập quyền hạn (Intents)
-        intents = discord.Intents.default()
-        intents.members = True
-        intents.message_content = True
+        # Prefix vẫn phải khai báo cho lớp cha nhưng chúng ta sẽ không dùng đến
+        intents = discord.Intents.all()
+        super().__init__(command_prefix="!#none_used", intents=intents)
+        self.db = None
 
-        super().__init__(command_prefix='!', intents=intents)
+    # Trong file app.py, sửa lại hàm on_ready
+    async def on_ready(self):
+        print(f'--- 🛠️ Bot {self.user.name} đã trực tuyến! ---')
 
-        # 2. Kho lưu trữ cấu hình trên RAM (Cache)
-        self.server_configs = {}
-        self.load_all_configs()
+        # Đếm tổng số lệnh đã nạp trong tree
+        total_commands = len(self.tree.get_commands())
+        print(f"📡 Tổng số lệnh tìm thấy trong code: {total_commands}")
 
-    def load_all_configs(self):
-        """Đọc file JSON vào RAM khi khởi động"""
-        if not os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-                json.dump({"guilds": {}}, f)
+        # Vòng lặp duyệt qua tất cả các server bot đang tham gia
+        for guild in self.guilds:
+            try:
+                # BƯỚC QUAN TRỌNG:
+                # Copy toàn bộ lệnh Global vào bộ nhớ đệm của Server này
+                self.tree.copy_global_to(guild=guild)
 
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            self.server_configs = json.load(f)
-        print("📂 Đã nạp cấu hình các server vào RAM.")
+                # Ép Discord đồng bộ ngay lập tức cho Server này
+                synced = await self.tree.sync(guild=guild)
 
-    def save_configs(self):
-        """Ghi dữ liệu từ RAM xuống file JSON (gọi khi có thay đổi)"""
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.server_configs, f, ensure_ascii=False, indent=4)
+                print(f"✅ Đã sync {len(synced)} lệnh cho server: {guild.name} ({guild.id})")
+            except discord.errors.Forbidden:
+                print(f"❌ Thiếu quyền 'applications.commands' tại server: {guild.name}")
+            except Exception as e:
+                print(f"❌ Lỗi khi sync tại server {guild.name}: {e}")
+
+        print("🚀 Tất cả các server đã được cập nhật lệnh mới nhất!")
 
     async def setup_hook(self):
-        """Hàm chạy một lần khi bot khởi động"""
+        self.db = await aiosqlite.connect('yuri_bot.db')
+        # ... (Các câu lệnh CREATE TABLE giữ nguyên như bản cũ Huy đã có)
+        await self.db.commit()
+        print("✅ SQLite Database Ready!")
 
-        print("--- 🛠️ Đang nạp các Cogs ---")
         for filename in os.listdir('./cogs'):
             if filename.endswith('.py'):
-                try:
-                    await self.load_extension(f'cogs.{filename[:-3]}')
-                    print(f"✅ Đã nạp: {filename}")
-                except Exception as e:
-                    print(f"❌ Lỗi nạp {filename}: {e}")
+                await self.load_extension(f'cogs.{filename[:-3]}')
 
-        # Đồng bộ lệnh Slash
-        MY_GUILD = discord.Object(id=1502283307214180462)
-        self.tree.copy_global_to(guild=MY_GUILD)
-        await self.tree.sync(guild=MY_GUILD)
+    async def close(self):
+        if self.db: await self.db.close()
+        await super().close()
 
-        print("--- 🚀 Hệ thống đã sẵn sàng ---")
-
-    async def on_ready(self):
-        print(f'>>> Bot {self.user.name} (ID: {self.user.id}) đã trực tuyến!')
-
-
-# Khởi tạo và chạy bot
-if __name__ == "__main__":
-    bot = MyBot()
-    bot.run(TOKEN)
+bot = YuriBot()
+bot.run(TOKEN)

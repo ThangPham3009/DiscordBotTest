@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+import aiosqlite
 
 
 class ReactionRoles(commands.Cog):
@@ -16,47 +17,34 @@ class ReactionRoles(commands.Cog):
                           emoji4: str = None, role4: discord.Role = None,
                           emoji5: str = None, role5: discord.Role = None):
 
-        guild_id = str(interaction.guild.id)
+        await interaction.response.defer()  # Tránh bị timeout nếu thêm nhiều reaction
 
-        # 1. Xây dựng danh sách cặp Emoji - Role
-        raw_pairs = [
-            (emoji1, role1), (emoji2, role2), (emoji3, role3), (emoji4, role4), (emoji5, role5)
-        ]
-
+        # 1. Xử lý các cặp Emoji - Role
+        raw_pairs = [(emoji1, role1), (emoji2, role2), (emoji3, role3), (emoji4, role4), (emoji5, role5)]
         valid_pairs = [(emo, role) for emo, role in raw_pairs if emo and role]
 
-        # 2. Tạo nội dung Embed chuyên nghiệp
-        header = "Bấm vào các cảm xúc bên dưới để nhận hoặc gỡ vai trò của bạn.\n\u200b\n"
-        role_list_str = "\n".join([f"• {emo} **{role.mention}**" for emo, role in valid_pairs])
+        # 2. Xây dựng Embed
+        description = "Bấm vào các cảm xúc bên dưới để nhận hoặc gỡ vai trò.\n\n"
+        description += "\n".join([f"• {emo} **{role.mention}**" for emo, role in valid_pairs])
 
-        embed = discord.Embed(
-            title=f"**{title}**",
-            description=header + role_list_str,
-            color=0x2b2d31  # Màu xám tối đặc trưng Discord
-        )
+        embed = discord.Embed(title=f"**{title}**", description=description, color=0x2b2d31)
 
-        # 3. Gửi Embed
-        await interaction.response.send_message(embed=embed)
-        sent_msg = await interaction.original_response()
+        # 3. Gửi Embed và lấy Message ID
+        sent_msg = await interaction.followup.send(embed=embed)
 
-        # 4. Lưu dữ liệu vào cache RAM và file JSON
-        if guild_id not in self.bot.server_configs["guilds"]:
-            self.bot.server_configs["guilds"][guild_id] = {}
-
-        if "reaction_roles" not in self.bot.server_configs["guilds"][guild_id]:
-            self.bot.server_configs["guilds"][guild_id]["reaction_roles"] = {}
-
-        msg_id = str(sent_msg.id)
-        self.bot.server_configs["guilds"][guild_id]["reaction_roles"][msg_id] = {}
-
+        # 4. Lưu vào SQLite và thêm Reaction
         for emo, role in valid_pairs:
             try:
                 await sent_msg.add_reaction(emo)
-                self.bot.server_configs["guilds"][guild_id]["reaction_roles"][msg_id][emo] = role.id
+                # Lưu từng cặp emoji-role vào database
+                await self.bot.db.execute('''
+                                          INSERT INTO reaction_roles (message_id, guild_id, emoji, role_id)
+                                          VALUES (?, ?, ?, ?)
+                                          ''', (sent_msg.id, interaction.guild.id, str(emo), role.id))
             except Exception as e:
-                print(f"❗ Không thể thêm reaction {emo}: {e}")
+                print(f"❗ Lỗi thêm reaction/lưu DB {emo}: {e}")
 
-        self.bot.save_configs()
+        await self.bot.db.commit()
 
     # --- LISTENER XỬ LÝ REACTION ---
 
@@ -64,35 +52,34 @@ class ReactionRoles(commands.Cog):
     async def on_raw_reaction_add(self, payload):
         if payload.member.bot: return
 
-        guild_id = str(payload.guild_id)
-        msg_id = str(payload.message_id)
-        emoji = str(payload.emoji)
+        # Truy vấn role_id từ database dựa trên msg_id và emoji
+        async with self.bot.db.execute(
+                "SELECT role_id FROM reaction_roles WHERE message_id = ? AND emoji = ?",
+                (payload.message_id, str(payload.emoji))
+        ) as cursor:
+            result = await cursor.fetchone()
 
-        # Truy xuất từ cache RAM
-        guild_data = self.bot.server_configs["guilds"].get(guild_id, {})
-        role_map = guild_data.get("reaction_roles", {}).get(msg_id)
-
-        if role_map and emoji in role_map:
-            role_id = role_map[emoji]
+        if result:
+            role_id = result[0]
             guild = self.bot.get_guild(payload.guild_id)
             role = guild.get_role(role_id)
             if role:
                 try:
                     await payload.member.add_roles(role)
                 except discord.Forbidden:
-                    print(f"❌ Thiếu quyền cấp Role tại Guild {guild_id}")
+                    print(f"❌ Thiếu quyền cấp Role tại Guild {payload.guild_id}")
 
     @commands.Cog.listener()
     async def on_raw_reaction_remove(self, payload):
-        guild_id = str(payload.guild_id)
-        msg_id = str(payload.message_id)
-        emoji = str(payload.emoji)
+        # Lưu ý: on_raw_reaction_remove không có payload.member
+        async with self.bot.db.execute(
+                "SELECT role_id FROM reaction_roles WHERE message_id = ? AND emoji = ?",
+                (payload.message_id, str(payload.emoji))
+        ) as cursor:
+            result = await cursor.fetchone()
 
-        guild_data = self.bot.server_configs["guilds"].get(guild_id, {})
-        role_map = guild_data.get("reaction_roles", {}).get(msg_id)
-
-        if role_map and emoji in role_map:
-            role_id = role_map[emoji]
+        if result:
+            role_id = result[0]
             guild = self.bot.get_guild(payload.guild_id)
             role = guild.get_role(role_id)
             member = guild.get_member(payload.user_id)
@@ -101,7 +88,7 @@ class ReactionRoles(commands.Cog):
                 try:
                     await member.remove_roles(role)
                 except discord.Forbidden:
-                    print(f"❌ Thiếu quyền gỡ Role tại Guild {guild_id}")
+                    print(f"❌ Thiếu quyền gỡ Role tại Guild {payload.guild_id}")
 
 
 async def setup(bot):
