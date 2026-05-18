@@ -4,4 +4,3 @@ config.json
 __pycache__/
 *.pyc
 server_config.json
-*.db
