@@ -1,5 +1,4 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 
 
@@ -7,33 +6,22 @@ class Welcome(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name="set_welcome", description="[Admin] Thiết lập kênh chào mừng/tạm biệt cho server")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def set_welcome(self, interaction: discord.Interaction, channel: discord.TextChannel):
-        guild_id = str(interaction.guild.id)
-
-        # Khởi tạo vùng nhớ cho server nếu chưa có
-        if guild_id not in self.bot.server_configs["guilds"]:
-            self.bot.server_configs["guilds"][guild_id] = {}
-
-        # Lưu ID kênh vào cache trên RAM
-        self.bot.server_configs["guilds"][guild_id]["welcome_channel"] = channel.id
-
-        # Ghi xuống file JSON thông qua hàm ở app.py
-        self.bot.save_configs()
-
-        await interaction.response.send_message(f"✅ Đã thiết lập {channel.mention} làm kênh chào mừng và tạm biệt!",
-                                                ephemeral=True)
-
     @commands.Cog.listener()
     async def on_member_join(self, member):
-        guild_id = str(member.guild.id)
-        # Truy xuất kênh từ cache RAM
-        configs = self.bot.server_configs["guilds"].get(guild_id, {})
-        channel_id = configs.get("welcome_channel")
+        # Đảm bảo database đã sẵn sàng
+        if not self.bot.db: return
 
-        if channel_id:
+        # Truy xuất ID kênh từ SQLite
+        async with self.bot.db.execute(
+                "SELECT welcome_channel_id FROM server_configs WHERE guild_id = ?",
+                (member.guild.id,)
+        ) as cursor:
+            result = await cursor.fetchone()
+
+        if result and result[0]:
+            channel_id = result[0]
             channel = member.guild.get_channel(channel_id)
+
             if channel:
                 embed = discord.Embed(
                     title=f"✨ Chào mừng {member.name} đã đến với Yuri Garden. ✨",
@@ -49,13 +37,19 @@ class Welcome(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_remove(self, member):
-        guild_id = str(member.guild.id)
-        # Truy xuất kênh từ cache RAM
-        configs = self.bot.server_configs["guilds"].get(guild_id, {})
-        channel_id = configs.get("welcome_channel")
+        if not self.bot.db: return
 
-        if channel_id:
+        # Truy xuất ID kênh từ SQLite
+        async with self.bot.db.execute(
+                "SELECT welcome_channel_id FROM server_configs WHERE guild_id = ?",
+                (member.guild.id,)
+        ) as cursor:
+            result = await cursor.fetchone()
+
+        if result and result[0]:
+            channel_id = result[0]
             channel = member.guild.get_channel(channel_id)
+
             if channel:
                 embed = discord.Embed(
                     title="🌿 Tạm biệt...",

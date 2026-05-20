@@ -3,4 +3,5 @@ config.json
 .venv/
 __pycache__/
 *.pyc
-server_config.json
+*.db
+
